@@ -71,3 +71,8 @@ resource "aws_sagemaker_notebook_instance" "notebook_instance" {
   lifecycle_config_name = aws_sagemaker_notebook_instance_lifecycle_configuration.notebook_config.name
   default_code_repository = aws_sagemaker_code_repository.git_repo.code_repository_name
 }
+
+resource "aws_ecr_repository" "image-search_repository" {
+  name                 = "sagemaker-image-search-repo"
+  image_tag_mutability = "MUTABLE"
+}
