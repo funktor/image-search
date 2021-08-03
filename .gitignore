@@ -1,0 +1,9 @@
+model/
+.ipynb_checkpoints/
+__pycache__/
+*tfstate*
+*lock*
+.terraform/
+*.png
+test_dir/
+*.tfrecords
