@@ -18,9 +18,19 @@ import numpy as np
 import requests
 from flask import Flask, request, jsonify
 from PIL import Image
+import boto3
 
 prefix = "/opt/ml/"
 model_path = os.path.join(prefix, "model")
+s3 = boto3.resource('s3')
+bucket = 'data-bucket-sagemaker-image-search'
+key = 'training'
+
+def image_from_s3(bucket, key):
+    bucket = s3.Bucket(bucket)
+    image = bucket.Object(key)
+    img_data = image.get().get('Body').read()
+    return Image.open(io.BytesIO(img_data))
 
 class SearchService(object):
     filenames = None
@@ -66,25 +76,22 @@ def search():
     embed = json.loads(r.content.decode('utf-8'))
 
     img_paths = SearchService.predict(embed['predictions'])
-    
-    return json.dumps({'status':'success', 'response':img_paths})
 
-#     plt.figure(figsize=(10, 10))
+    plt.figure(figsize=(10, 10))
 
-#     i = 0
-#     for file in img_paths:
-#         print(file)
-#         ax = plt.subplot(1, len(img_paths), i+1)
-#         img = tf.keras.preprocessing.image.load_img(file, target_size=img_size)
-#         img_array = tf.keras.preprocessing.image.img_to_array(img)
-#         plt.imshow(img_array / 255)
-#         plt.axis('off')
-#         i += 1
+    i = 0
+    for file in img_paths:
+        ax = plt.subplot(1, len(img_paths), i+1)
+        img = image_from_s3(bucket, os.path.join(key, file))
+        img_array = tf.keras.preprocessing.image.img_to_array(img)
+        plt.imshow(img_array / 255)
+        plt.axis('off')
+        i += 1
 
-#     io_bytes = BytesIO()
-#     plt.savefig(io_bytes, format='jpg')
-#     io_bytes.seek(0)
-#     b64_data = base64.b64encode(io_bytes.read())
+    io_bytes = BytesIO()
+    plt.savefig(io_bytes, format='jpg')
+    io_bytes.seek(0)
+    b64_data = base64.b64encode(io_bytes.read())
 
-#     return json.dumps({'status':'success', 'response':b64_data.decode('utf-8')})
+    return json.dumps({'status':'success', 'response':b64_data.decode('utf-8')})
 

@@ -2,7 +2,6 @@ import boto3, os, sagemaker, re, numpy as np
 from sagemaker import get_execution_role
 import sagemaker as sage
 from time import gmtime, strftime
-from sagemaker.tensorflow import TensorFlow
 
 sagemaker_role = 'sagemaker-role-image-search'
 s3_data_bucket = 'data-bucket-sagemaker-image-search'
@@ -30,4 +29,4 @@ model = sage.estimator.Estimator(image,
 
 model.fit({'complete':'s3://{}/{}/complete.tfrecords'.format(s3_data_bucket, s3_data_key)})
 
-predictor = model.deploy(initial_instance_count=1, instance_type="ml.m4.xlarge")
+print("Model S3 location", model.model_data)
