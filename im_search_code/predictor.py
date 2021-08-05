@@ -19,14 +19,20 @@ import requests
 from flask import Flask, request, jsonify
 from PIL import Image
 import boto3
+import multiprocessing
 
 prefix = "/opt/ml/"
 model_path = os.path.join(prefix, "model")
-s3 = boto3.resource('s3')
+s3 = None
 bucket = 'data-bucket-sagemaker-image-search'
 key = 'training'
 
-def image_from_s3(bucket, key):
+def initialize():
+    global s3
+    s3 = boto3.resource('s3')
+
+def image_from_s3(inp):
+    bucket, key = inp
     bucket = s3.Bucket(bucket)
     image = bucket.Object(key)
     img_data = image.get().get('Body').read()
@@ -76,13 +82,19 @@ def search():
     embed = json.loads(r.content.decode('utf-8'))
 
     img_paths = SearchService.predict(embed['predictions'])
+    
+    img_inp = [(bucket, os.path.join(key, file)) for file in img_paths]
+    
+    pool = multiprocessing.Pool(multiprocessing.cpu_count(), initialize)
+    images = pool.map(image_from_s3, img_inp)
+    pool.close()
+    pool.join()
 
     plt.figure(figsize=(10, 10))
 
     i = 0
-    for file in img_paths:
+    for img in images:
         ax = plt.subplot(1, len(img_paths), i+1)
-        img = image_from_s3(bucket, os.path.join(key, file))
         img_array = tf.keras.preprocessing.image.img_to_array(img)
         plt.imshow(img_array / 255)
         plt.axis('off')
