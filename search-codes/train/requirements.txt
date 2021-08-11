@@ -8,3 +8,4 @@ sklearn
 flask
 gunicorn
 boto3
+keras

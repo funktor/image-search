@@ -24,8 +24,8 @@ import multiprocessing
 prefix = "/opt/ml/"
 model_path = os.path.join(prefix, "model")
 s3 = None
-bucket = 'data-bucket-sagemaker-image-search'
-key = 'training'
+s3_bucket = 'data-bucket-sagemaker-image-search'
+s3_key = 'training'
 
 def initialize():
     global s3
@@ -83,22 +83,34 @@ def search():
 
     img_paths = SearchService.predict(embed['predictions'])
     
-    img_inp = [(bucket, os.path.join(key, file)) for file in img_paths]
-    
-    pool = multiprocessing.Pool(multiprocessing.cpu_count(), initialize)
-    images = pool.map(image_from_s3, img_inp)
-    pool.close()
-    pool.join()
+    if 'RUNTIME_ENV' not in os.environ or os.environ['RUNTIME_ENV'] == 'local':
+        plt.figure(figsize=(10, 10))
 
-    plt.figure(figsize=(10, 10))
+        i = 0
+        for file in img_paths:
+            ax = plt.subplot(1, len(img_paths), i+1)
+            img = tf.keras.preprocessing.image.load_img(file)
+            img_array = tf.keras.preprocessing.image.img_to_array(img)
+            plt.imshow(img_array / 255)
+            plt.axis('off')
+            i += 1
+    else:
+        img_inp = [(s3_bucket, os.path.join(s3_key, file)) for file in img_paths]
 
-    i = 0
-    for img in images:
-        ax = plt.subplot(1, len(img_paths), i+1)
-        img_array = tf.keras.preprocessing.image.img_to_array(img)
-        plt.imshow(img_array / 255)
-        plt.axis('off')
-        i += 1
+        pool = multiprocessing.Pool(multiprocessing.cpu_count(), initialize)
+        images = pool.map(image_from_s3, img_inp)
+        pool.close()
+        pool.join()
+
+        plt.figure(figsize=(10, 10))
+
+        i = 0
+        for img in images:
+            ax = plt.subplot(1, len(img_paths), i+1)
+            img_array = tf.keras.preprocessing.image.img_to_array(img)
+            plt.imshow(img_array / 255)
+            plt.axis('off')
+            i += 1
 
     io_bytes = BytesIO()
     plt.savefig(io_bytes, format='jpg')

@@ -4,10 +4,10 @@ from __future__ import print_function
 
 import matplotlib.pyplot as plt
 import numpy as np
-import os, json, sys, math
+import os, json, sys, math, argparse
 import tensorflow as tf
 from sklearn.neighbors import BallTree
-import pickle
+import pickle, glob
 import importlib
 from model import SearchModel
 from sagemaker_tensorflow import PipeModeDataset
@@ -54,8 +54,8 @@ def _dataset_imagename_parser(example_proto):
     return image, features['image_name']
 
 def get_dataset_from_tfrecords(channel_name, batch_size, epochs):
-    if 'environment' not in os.environ or os.environ['environment'] == 'local':
-        dataset = tf.data.TFRecordDataset([os.path.join(input_path, channel_name, channel_name + ".tfrecords")])
+    if 'RUNTIME_ENV' not in os.environ or os.environ['RUNTIME_ENV'] == 'local':
+        dataset = tf.data.TFRecordDataset([f for f in glob.glob(os.path.join(input_path, channel_name, "*.tfrecords"))])
     else:
         dataset = PipeModeDataset(channel=channel_name, record_format="TFRecord")
     
@@ -63,17 +63,17 @@ def get_dataset_from_tfrecords(channel_name, batch_size, epochs):
     dataset = dataset.prefetch(10)
     dataset = dataset.map(_dataset_parser, num_parallel_calls=10)
 
-    if channel_name == "train" or channel_name == "complete":
-        buffer_size = 5 * batch_size
+    if channel_name == "train":
+        buffer_size = 3 * batch_size
         dataset = dataset.shuffle(buffer_size=buffer_size)
 
-    dataset = dataset.batch(batch_size, drop_remainder=True)
+    dataset = dataset.batch(batch_size, drop_remainder=False)
     
     return dataset
 
 def get_image_names_from_tfrecords(channel_name, batch_size, epochs):
-    if 'environment' not in os.environ or os.environ['environment'] == 'local':
-        dataset = tf.data.TFRecordDataset([os.path.join(input_path, channel_name, channel_name + ".tfrecords")])
+    if 'RUNTIME_ENV' not in os.environ or os.environ['RUNTIME_ENV'] == 'local':
+        dataset = tf.data.TFRecordDataset([f for f in glob.glob(os.path.join(input_path, channel_name, "*.tfrecords"))])
     else:
         dataset = PipeModeDataset(channel=channel_name, record_format="TFRecord")
     
@@ -83,8 +83,6 @@ def get_image_names_from_tfrecords(channel_name, batch_size, epochs):
     dataset = dataset.batch(batch_size, drop_remainder=False)
     
     return dataset
-    
-    
 
 def train():
     print('Getting hyperparameters...')
@@ -97,15 +95,39 @@ def train():
     epochs = int(training_params['epochs'])
     learning_rate = float(training_params['lr'])
     run_id = int(training_params['run_id'])
+    is_parallel = training_params['is_parallel']
+    
+    mpi = None
+    
+    if is_parallel.lower() == "true":
+        import horovod.tensorflow.keras as hvd
+
+        mpi = True
+        hvd.init()
+
+        gpus = tf.config.experimental.list_physical_devices('GPU')
+        for gpu in gpus:
+            tf.config.experimental.set_memory_growth(gpu, True)
+        if gpus:
+            tf.config.experimental.set_visible_devices(gpus[hvd.local_rank()], 'GPU')
+            
+    else:
+        hvd = None
+        
+    if hvd is not None:
+        channel_name = str(hvd.local_rank())
+    else:
+        channel_name = "0"
 
     print('Getting training datasets...')
-    complete_dataset = get_dataset_from_tfrecords("complete", batch_size, 1)
+    complete_dataset = get_dataset_from_tfrecords(channel_name, batch_size, 1)
     
     num_classes = len(set(np.concatenate([y for x, y in complete_dataset], axis=0).tolist()))
     print(num_classes)
 
     print('Initializing model object...')
-    model_obj = SearchModel(full_model_path=os.path.join(model_path, 'image_search_model/'+str(run_id)), img_shape=img_shape, epochs=epochs, learning_rate=learning_rate)
+    model_obj = SearchModel(full_model_path=os.path.join(model_path, 'image_search_model/'+str(run_id)), 
+                            img_shape=img_shape, epochs=epochs, learning_rate=learning_rate, mpi=mpi, hvd=hvd)
     model_obj.init(num_classes=num_classes)
 
     print('Training model...')
@@ -113,7 +135,7 @@ def train():
 
     print('Computing embeddings...')
     embeddings = np.empty(shape=(0, 2048))
-    complete_dataset = get_image_names_from_tfrecords("complete", batch_size, 1)
+    complete_dataset = get_image_names_from_tfrecords(channel_name, batch_size, 1)
     
     filenames = []
     

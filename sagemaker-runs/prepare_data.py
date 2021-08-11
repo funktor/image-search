@@ -28,11 +28,15 @@ data_processor = Processor(role=role,
 input_folder = '/opt/ml/processing/input'
 output_folder = '/opt/ml/processing/output'
 s3_input = 's3://{}/{}'.format(s3_data_bucket, s3_data_key)
+number_instances=2
+num_gpus_per_instance=4
 
 data_processor.run(
     arguments= [
         f'--input={input_folder}',
-        f'--output={output_folder}'
+        f'--output={output_folder}',
+        f'--number_instances={number_instances}',
+        f'--num_gpus_per_instance={num_gpus_per_instance}'
     ],
     inputs = [
         ProcessingInput(
