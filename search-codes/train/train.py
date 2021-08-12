@@ -12,12 +12,7 @@ import importlib
 from model import SearchModel
 from sagemaker_tensorflow import PipeModeDataset
 
-prefix = '/opt/ml/'
-
-input_path = prefix + 'input/data'
-output_path = os.path.join(prefix, 'output')
-model_path = os.path.join(prefix, 'model')
-param_path = os.path.join(prefix, 'input/config/hyperparameters.json')
+num_examples_per_epoch=29780
 
 image_feature_description = {
     'image_name': tf.io.FixedLenFeature([], tf.string),
@@ -53,11 +48,11 @@ def _dataset_imagename_parser(example_proto):
     
     return image, features['image_name']
 
-def get_dataset_from_tfrecords(channel_name, batch_size, epochs):
-    if 'RUNTIME_ENV' not in os.environ or os.environ['RUNTIME_ENV'] == 'local':
-        dataset = tf.data.TFRecordDataset([f for f in glob.glob(os.path.join(input_path, channel_name, "*.tfrecords"))])
-    else:
+def get_dataset_from_tfrecords(channel, channel_name, batch_size, epochs, mode):
+    if mode == 'Pipe':
         dataset = PipeModeDataset(channel=channel_name, record_format="TFRecord")
+    else:
+        dataset = tf.data.TFRecordDataset([f for f in glob.glob(os.path.join(channel, "*.tfrecords"))])
     
     dataset = dataset.repeat(epochs)
     dataset = dataset.prefetch(10)
@@ -71,11 +66,11 @@ def get_dataset_from_tfrecords(channel_name, batch_size, epochs):
     
     return dataset
 
-def get_image_names_from_tfrecords(channel_name, batch_size, epochs):
-    if 'RUNTIME_ENV' not in os.environ or os.environ['RUNTIME_ENV'] == 'local':
-        dataset = tf.data.TFRecordDataset([f for f in glob.glob(os.path.join(input_path, channel_name, "*.tfrecords"))])
-    else:
+def get_image_names_from_tfrecords(channel, channel_name, batch_size, epochs, mode):
+    if mode == 'Pipe':
         dataset = PipeModeDataset(channel=channel_name, record_format="TFRecord")
+    else:
+        dataset = tf.data.TFRecordDataset([f for f in glob.glob(os.path.join(channel, "*.tfrecords"))])
     
     dataset = dataset.repeat(epochs)
     dataset = dataset.prefetch(10)
@@ -84,22 +79,19 @@ def get_image_names_from_tfrecords(channel_name, batch_size, epochs):
     
     return dataset
 
-def train():
+def train(args):
     print('Getting hyperparameters...')
-    with open(param_path, 'r') as tc:
-        training_params = json.load(tc)
 
-    img_size = (int(training_params['img_width']), int(training_params['img_height']))
-    batch_size = int(training_params['batch_size'])
-    img_shape = (int(training_params['img_width']), int(training_params['img_height']), 3)
-    epochs = int(training_params['epochs'])
-    learning_rate = float(training_params['lr'])
-    run_id = int(training_params['run_id'])
-    is_parallel = training_params['is_parallel']
+    img_size = (args.img_width, args.img_height)
+    batch_size = args.batch_size
+    img_shape = (args.img_width, args.img_height, 3)
+    epochs = args.epochs
+    learning_rate = args.lr
+    run_id = args.run_id
     
     mpi = None
     
-    if is_parallel.lower() == "true":
+    if 'sagemaker_mpi_enabled' in args.fw_params and args.fw_params['sagemaker_mpi_enabled']:
         import horovod.tensorflow.keras as hvd
 
         mpi = True
@@ -117,50 +109,108 @@ def train():
     if hvd is not None:
         channel_name = str(hvd.local_rank())
     else:
-        channel_name = "0"
+        channel_name = "complete"
 
     print('Getting training datasets...')
-    complete_dataset = get_dataset_from_tfrecords(channel_name, batch_size, 1)
+    complete_dataset = get_dataset_from_tfrecords(args.training_env['channel_input_dirs'][channel_name], 
+                                                  channel_name, 
+                                                  batch_size, epochs, 
+                                                  args.training_env['input_data_config'][channel_name]['TrainingInputMode'])
     
-    num_classes = len(set(np.concatenate([y for x, y in complete_dataset], axis=0).tolist()))
-    print(num_classes)
+    num_classes = 256
 
     print('Initializing model object...')
-    model_obj = SearchModel(full_model_path=os.path.join(model_path, 'image_search_model/'+str(run_id)), 
-                            img_shape=img_shape, epochs=epochs, learning_rate=learning_rate, mpi=mpi, hvd=hvd)
+    model_path = os.path.join(args.model_output_dir, 'image_search_model/'+str(run_id))
+    
+    optimizer = tf.keras.optimizers.Adam(learning_rate=learning_rate)
+    callbacks = []
+
+    if hvd:
+        size = hvd.size()
+        optimizer = hvd.DistributedOptimizer(optimizer)
+
+        callbacks.append(hvd.callbacks.BroadcastGlobalVariablesCallback(0))
+        callbacks.append(hvd.callbacks.MetricAverageCallback())
+        callbacks.append(hvd.callbacks.LearningRateWarmupCallback(warmup_epochs=5, verbose=1))
+
+        if hvd.rank() == 0:
+            callbacks.append(tf.keras.callbacks.ModelCheckpoint(filepath=model_path, 
+                                                                save_weights_only=False,
+                                                                verbose=1))
+    else:
+        size = 1
+        callbacks.append(tf.keras.callbacks.ModelCheckpoint(filepath=model_path, 
+                                                            save_weights_only=False,
+                                                            verbose=1))
+    
+    g = ((num_examples_per_epoch // batch_size) // size)
+    print(g*epochs)
+    print('Initializing class...')
+    model_obj = SearchModel(full_model_path=model_path, 
+                            img_shape=img_shape, 
+                            epochs=epochs, 
+                            learning_rate=learning_rate,
+                            steps_per_epoch=((num_examples_per_epoch // batch_size) // size),
+                            callbacks=callbacks, 
+                            optimizer=optimizer)
+    
+    print('Init...')
     model_obj.init(num_classes=num_classes)
 
     print('Training model...')
     model_obj.fit(complete_dataset)
+    
+    print('Saving model...')
+    if hvd is None or hvd.rank() == 0:
+        model_obj.save()
 
     print('Computing embeddings...')
-    embeddings = np.empty(shape=(0, 2048))
-    complete_dataset = get_image_names_from_tfrecords(channel_name, batch_size, 1)
-    
-    filenames = []
-    
-    for img_array_batch, image_names_batch in complete_dataset:
-        embeddings = np.concatenate((embeddings, model_obj.predict_on_batch(img_array_batch)), axis=0)
-        for file in image_names_batch:
-            filenames.append(file.numpy().decode('utf-8'))
-       
-    print(embeddings.shape)
-    
-    print(filenames[:10])
-    
-    print('Saving image names...')
-    with open(os.path.join(model_path, 'filenames.pkl'), 'wb') as f:
-        pickle.dump(filenames, f, protocol=pickle.HIGHEST_PROTOCOL)
+    if hvd is None or hvd.rank() == 0:
+        embeddings = np.empty(shape=(0, 2048))
+        filenames = []
+        
+        channel_name = 'complete'
+        ds = get_image_names_from_tfrecords(args.training_env['channel_input_dirs'][channel_name], 
+                                            channel_name, batch_size, 1, 
+                                            args.training_env['input_data_config'][channel_name]['TrainingInputMode'])
 
-    print('Creating balltree...')
-    tree = BallTree(embeddings, leaf_size=5)
+        for img_array_batch, image_names_batch in ds:
+            embeddings = np.concatenate((embeddings, model_obj.predict_on_batch(img_array_batch)), axis=0)
+            for file in image_names_batch:
+                filenames.append(file.numpy().decode('utf-8'))
 
-    print('Saving balltree...')
-    with open(os.path.join(model_path, 'ball_tree.pkl'), 'wb') as f:
-        pickle.dump(tree, f, protocol=pickle.HIGHEST_PROTOCOL)
+        print(embeddings.shape)
+
+        print(filenames[:10])
+        
+        print('Saving image names...')
+        with open(os.path.join(args.model_output_dir, 'filenames.pkl'), 'wb') as f:
+            pickle.dump(filenames, f, protocol=pickle.HIGHEST_PROTOCOL)
+
+        print('Creating balltree...')
+        tree = BallTree(embeddings, leaf_size=5)
+
+        print('Saving balltree...')
+        with open(os.path.join(args.model_output_dir, 'ball_tree.pkl'), 'wb') as f:
+            pickle.dump(tree, f, protocol=pickle.HIGHEST_PROTOCOL)
 
     print('Completed !!!')
     
 if __name__=="__main__":
-    train()
+    parser = argparse.ArgumentParser()
+    
+    parser.add_argument('--model_dir',type=str,required=True,help='The directory where the model will be stored.')
+    parser.add_argument('--model_output_dir',type=str,default=os.environ.get('SM_MODEL_DIR'))
+    parser.add_argument('--epochs',type=int,default=10)
+    parser.add_argument('--batch_size',type=int,default=64)
+    parser.add_argument('--img_height',type=int,default=128)
+    parser.add_argument('--img_width',type=int,default=128)
+    parser.add_argument('--lr',type=float,default=0.001)
+    parser.add_argument('--run_id',type=int,default=1)
+    parser.add_argument('--fw-params',type=json.loads,default=os.environ.get('SM_FRAMEWORK_PARAMS'))
+    parser.add_argument('--training-env',type=json.loads,default=os.environ.get('SM_TRAINING_ENV'))
+    
+    args = parser.parse_args()
+    
+    train(args)
     sys.exit(0)

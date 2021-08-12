@@ -17,11 +17,11 @@ account = sess.boto_session.client('sts').get_caller_identity()['Account']
 region = sess.boto_session.region_name
 image = '{}.dkr.ecr.{}.amazonaws.com/{}'.format(account, region, sagemaker_ecr)
 
-hyperparameters={'img_width':128, 'img_height':128, 'batch_size':256, 'epochs':10, 'lr':0.001, 'run_id':1, 'is_parallel':"true"}
+hyperparameters={'img_width':128, 'img_height':128, 'batch_size':64, 'epochs':10, 'lr':0.001, 'run_id':1}
 
-train_instance_type='ml.g4dn.12xlarge'
+train_instance_type='ml.g4dn.2xlarge'
 train_instance_count = 2
-gpus_per_host = 4
+gpus_per_host = 1
 
 distribution = {
     "mpi": {
@@ -39,6 +39,8 @@ for idx in range(gpus_per_host):
     train_s3_uri = f'{train_s3_uri_prefix}/{idx}/'
     train_s3_input = s3_input(train_s3_uri, shuffle_config=shuffle_config, distribution='ShardedByS3Key')
     remote_inputs[f'{idx}'] = train_s3_input
+
+remote_inputs['complete'] = f'{train_s3_uri_prefix}/complete/'
 
 model = TensorFlow(image_uri=image, 
                    role=role, 

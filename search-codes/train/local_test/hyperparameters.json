@@ -1,1 +1,1 @@
-{"img_width":128, "img_height":128, "batch_size":32, "epochs":10, "lr":0.001, "run_id":1, "is_parallel":"true"}
+{"img_width":128, "img_height":128, "batch_size":64, "epochs":5, "lr":0.001, "run_id":1}

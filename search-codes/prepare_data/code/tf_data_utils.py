@@ -61,13 +61,13 @@ def convert_to_tfrecord(filenames, labels, tfrecords_file):
             tf_example = image_example(image_string, labels[i], image_name)
             writer.write(tf_example.SerializeToString())
 
-def convert_to_tfrecords(filenames, labels, tfrecords_dir, n_instances, n_gpus):
+def convert_to_tfrecords_train(filenames, labels, tfrecords_dir, n_instances, n_gpus):
     num_processes = n_instances*n_gpus
     batch_size = int(math.ceil(len(filenames)/num_processes))
     
     for j in range(num_processes):
         folder_index = int(j/n_instances)
-        file_index = j % n_instances
+        file_index = j
         
         directory = os.path.join(tfrecords_dir, str(folder_index))
         
@@ -75,6 +75,24 @@ def convert_to_tfrecords(filenames, labels, tfrecords_dir, n_instances, n_gpus):
             os.makedirs(directory)
             
         f = os.path.join(directory, "train_" + str(file_index) + ".tfrecords")
+        p = Process(target=convert_to_tfrecord, args=(filenames[batch_size*j:min(batch_size*(j+1), len(filenames))], 
+                                                      labels[batch_size*j:min(batch_size*(j+1), len(filenames))], 
+                                                      f))
+        p.start()
+    
+    p.join()
+    
+def convert_to_tfrecords_eval(filenames, labels, tfrecords_dir):
+    num_processes = 10
+    batch_size = int(math.ceil(len(filenames)/num_processes))
+    
+    directory = os.path.join(tfrecords_dir, "complete")
+        
+    if not os.path.exists(directory):
+        os.makedirs(directory)
+    
+    for j in range(num_processes):            
+        f = os.path.join(directory, "train_" + str(j) + ".tfrecords")
         p = Process(target=convert_to_tfrecord, args=(filenames[batch_size*j:min(batch_size*(j+1), len(filenames))], 
                                                       labels[batch_size*j:min(batch_size*(j+1), len(filenames))], 
                                                       f))
@@ -95,10 +113,14 @@ class TFRecordsData:
     def convert_to_tfrecords(self):
         train_x, train_y = get_files_list(self.input_path)
         
-        convert_to_tfrecords(train_x, train_y, 
-                             self.out_dir, 
-                             self.number_instances, 
-                             self.num_gpus_per_instance)
+        print('GENERATING TRAIN TF RECORD FILES...')
+        convert_to_tfrecords_train(train_x, train_y, 
+                                   self.out_dir, 
+                                   self.number_instances, 
+                                   self.num_gpus_per_instance)
+        
+        print('GENERATING EVAL RECORD FILES...')
+        convert_to_tfrecords_eval(train_x, train_y, self.out_dir)
         
         
 if __name__ == "__main__":

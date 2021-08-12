@@ -5,17 +5,18 @@ import tensorflow as tf
 import pickle
 
 class SearchModel:
-    def __init__(self, full_model_path, img_shape=(128,128,3), epochs=5, learning_rate=0.001, mpi=None, hvd=None):
+    def __init__(self, full_model_path, img_shape=(128,128,3), epochs=5, learning_rate=0.001, 
+                 steps_per_epoch=100, callbacks=None, optimizer=None):
+        
         self.model_path = full_model_path
         self.img_shape = img_shape
         self.epochs = epochs
         self.learning_rate = learning_rate
-        self.callbacks = []
+        self.callbacks = callbacks
         self.model = None
         self.emb_model = None
-        self.mpi = mpi
-        self.hvd = hvd
-        self.opt = None
+        self.optimizer = optimizer
+        self.steps_per_epoch = steps_per_epoch
         
     def init(self, num_classes):
         data_augmentation = tf.keras.Sequential([
@@ -35,42 +36,15 @@ class SearchModel:
         self.model = tf.keras.Model(inputs, outputs)
         self.emb_model = tf.keras.Model(self.model.input, self.model.layers[-2].output)
         
-        if self.mpi:
-            self.learning_rate *= self.hvd.size()
-            
-        self.opt = tf.keras.optimizers.Adam(learning_rate=self.learning_rate)
-        
-        print(self.model_path)
-        
-        if self.mpi:
-            print(self.hvd.rank())
-            self.opt = self.hvd.DistributedOptimizer(self.opt)
-            
-            self.callbacks.append(self.hvd.callbacks.BroadcastGlobalVariablesCallback(0))
-            self.callbacks.append(self.hvd.callbacks.MetricAverageCallback())
-            self.callbacks.append(self.hvd.callbacks.LearningRateWarmupCallback(warmup_epochs=5, verbose=1))
-            
-            if self.hvd.rank() == 0:
-                self.callbacks.append(tf.keras.callbacks.ModelCheckpoint(filepath=self.model_path, 
-                                                                 save_weights_only=False,
-                                                                 verbose=1))
-        else:
-            self.callbacks.append(tf.keras.callbacks.ModelCheckpoint(filepath=self.model_path, 
-                                                                 save_weights_only=False,
-                                                                 verbose=1))
-        
-        self.model.compile(optimizer=self.opt,
+        self.model.compile(optimizer=self.optimizer,
                            loss=tf.keras.losses.SparseCategoricalCrossentropy(),
                            metrics=['accuracy'])
     
-    def fit(self, training_dataset, validation_dataset=None):
-        self.model.fit(training_dataset, epochs=self.epochs, validation_data=validation_dataset, callbacks=self.callbacks)
-        
-        if self.mpi:
-            if self.hvd.rank() == 0:
-                self.emb_model.save(self.model_path)
-        else:
-            self.emb_model.save(self.model_path)
+    def fit(self, training_dataset):
+        self.model.fit(training_dataset, 
+                       steps_per_epoch=self.steps_per_epoch, 
+                       epochs=self.epochs,
+                       callbacks=self.callbacks)
     
     def predict(self, img_array):
         if len(img_array.shape) == 1:
@@ -81,13 +55,12 @@ class SearchModel:
     def predict_on_batch(self, img_batch):
         return self.emb_model.predict_on_batch(img_batch)
     
-    def save(self):
-        if self.mpi:
-            if self.hvd.rank() == 0:
-                self.model.save(self.model_path)
+    def save(self, model=None):
+        if model is None:
+            self.emb_model.save(self.model_path)
         else:
-            self.model.save(self.model_path)
+            model.save(self.model_path)
     
     def load(self):
-        self.model = tf.keras.models.load_model(self.model_path)
-        self.emb_model = tf.keras.Model(self.model.input, self.model.layers[-2].output)
+        model = tf.keras.models.load_model(self.model_path)
+        return model
