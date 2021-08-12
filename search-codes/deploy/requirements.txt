@@ -1,0 +1,11 @@
+joblib
+matplotlib
+numpy
+pandas
+scikit-learn
+scipy
+sklearn
+flask
+gunicorn
+boto3
+keras

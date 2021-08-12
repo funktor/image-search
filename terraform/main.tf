@@ -62,6 +62,11 @@ resource "aws_ecr_repository" "tfrecords_repository" {
   image_tag_mutability = "MUTABLE"
 }
 
+resource "aws_ecr_repository" "image-search-deploy_repository" {
+  name                 = "sagemaker-image-search-deploy-repo"
+  image_tag_mutability = "MUTABLE"
+}
+
 resource "aws_api_gateway_rest_api" "rest_api" {
   name = "image-search-api"
 }
