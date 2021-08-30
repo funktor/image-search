@@ -105,7 +105,7 @@ resource "aws_iam_role" "apigw_sm_invoke" {
 data "aws_iam_policy_document" "apigw_sm_invoke_access" {
   statement {
     actions   = ["sagemaker:InvokeEndpoint"]
-    resources = ["arn:aws:sagemaker:us-east-1:627048988170:endpoint/image-search-engine"]
+    resources = ["arn:aws:sagemaker:us-east-1:706073161968:endpoint/image-search-engine"]
   }
 }
 

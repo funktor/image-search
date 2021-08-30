@@ -6,7 +6,7 @@ import multiprocessing
 import boto3
 
 S3_BUCKET_NAME = 'data-bucket-sagemaker-image-search'
-images_dir = "/Users/amondal/Documents/datasets/Caltech"
+images_dir = "/Users/abhijitmondal/Documents/datasets/natural_images"
 s3 = None
 
 extensions = ['.jpg', '.JPG', '.jpeg', '.JPEG', '.png', '.PNG']

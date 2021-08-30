@@ -19,5 +19,5 @@ ENV PATH="/opt/ml/code:${PATH}"
 ENV RUNTIME_ENV="aws"
 
 # /opt/ml and all subdirectories are utilized by SageMaker, we use the /code subdirectory to store our user code.
-COPY /* /opt/ml/code/
+COPY /code/* /opt/ml/code/
 WORKDIR /opt/ml/code

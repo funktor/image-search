@@ -12,7 +12,7 @@ import importlib
 from model import SearchModel
 from sagemaker_tensorflow import PipeModeDataset
 
-num_examples_per_epoch=29780
+num_examples_per_epoch=6899
 
 image_feature_description = {
     'image_name': tf.io.FixedLenFeature([], tf.string),
@@ -117,7 +117,7 @@ def train(args):
                                                   batch_size, epochs, 
                                                   args.training_env['input_data_config'][channel_name]['TrainingInputMode'])
     
-    num_classes = 256
+    num_classes = 8
 
     print('Initializing model object...')
     model_path = os.path.join(args.model_output_dir, 'image_search_model/'+str(run_id))
@@ -143,8 +143,6 @@ def train(args):
                                                             save_weights_only=False,
                                                             verbose=1))
     
-    g = ((num_examples_per_epoch // batch_size) // size)
-    print(g*epochs)
     print('Initializing class...')
     model_obj = SearchModel(full_model_path=model_path, 
                             img_shape=img_shape, 
@@ -165,34 +163,35 @@ def train(args):
         model_obj.save()
 
     print('Computing embeddings...')
-    if hvd is None or hvd.rank() == 0:
-        embeddings = np.empty(shape=(0, 2048))
-        filenames = []
+    
+    embeddings = np.empty(shape=(0, 2048))
+    filenames = []
+
+    ds = get_image_names_from_tfrecords(args.training_env['channel_input_dirs'][channel_name], 
+                                        channel_name, batch_size, 1, 
+                                        args.training_env['input_data_config'][channel_name]['TrainingInputMode'])
+
+    for img_array_batch, image_names_batch in ds:
+        embeddings = np.concatenate((embeddings, model_obj.predict_on_batch(img_array_batch)), axis=0)
+        for file in image_names_batch:
+            filenames.append(file.numpy().decode('utf-8'))
+    
+    if hvd is None:
+        metadata_file = 'metadata.pkl'
+            
+    else:
+        metadata_file = 'metadata_' + str(hvd.rank()) + '.pkl'
         
-        channel_name = 'complete'
-        ds = get_image_names_from_tfrecords(args.training_env['channel_input_dirs'][channel_name], 
-                                            channel_name, batch_size, 1, 
-                                            args.training_env['input_data_config'][channel_name]['TrainingInputMode'])
+    print('Creating balltree...')
+    tree = BallTree(embeddings, leaf_size=5)
 
-        for img_array_batch, image_names_batch in ds:
-            embeddings = np.concatenate((embeddings, model_obj.predict_on_batch(img_array_batch)), axis=0)
-            for file in image_names_batch:
-                filenames.append(file.numpy().decode('utf-8'))
-
-        print(embeddings.shape)
-
-        print(filenames[:10])
-        
-        print('Saving image names...')
-        with open(os.path.join(args.model_output_dir, 'filenames.pkl'), 'wb') as f:
-            pickle.dump(filenames, f, protocol=pickle.HIGHEST_PROTOCOL)
-
-        print('Creating balltree...')
-        tree = BallTree(embeddings, leaf_size=5)
-
-        print('Saving balltree...')
-        with open(os.path.join(args.model_output_dir, 'ball_tree.pkl'), 'wb') as f:
-            pickle.dump(tree, f, protocol=pickle.HIGHEST_PROTOCOL)
+    print('Saving balltree...')
+    
+    if not os.path.exists(os.path.join(args.model_output_dir, 'metadata')):
+        os.makedirs(os.path.join(args.model_output_dir, 'metadata'))
+            
+    with open(os.path.join(args.model_output_dir, 'metadata', metadata_file), 'wb') as f:
+        pickle.dump((filenames, tree), f, protocol=pickle.HIGHEST_PROTOCOL)
 
     print('Completed !!!')
     

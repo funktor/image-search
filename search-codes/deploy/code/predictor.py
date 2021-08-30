@@ -6,7 +6,7 @@ import json
 import os
 import pickle
 import signal
-import sys
+import sys, glob, heapq
 import traceback
 
 import flask
@@ -26,6 +26,7 @@ model_path = os.path.join(prefix, "model")
 s3 = None
 s3_bucket = 'data-bucket-sagemaker-image-search'
 s3_key = 'training'
+local_path = os.path.join(prefix, "processing", "input")
 
 def initialize():
     global s3
@@ -45,19 +46,35 @@ class SearchService(object):
     @classmethod
     def get_model(cls):
         if cls.tree == None:
-            with open(os.path.join(model_path, "ball_tree.pkl"), "rb") as f:
-                cls.tree = pickle.load(f)
-                
-            with open(os.path.join(model_path, "filenames.pkl"), "rb") as f:
-                cls.filenames = pickle.load(f)
+            cls.tree, cls.filenames = [], []
+            
+            for pkl_file in glob.glob(os.path.join(model_path, 'metadata', '*.pkl')):
+                with open(pkl_file, "rb") as f:
+                    a, b = pickle.load(f)
+                    cls.filenames += [a]
+                    cls.tree += [b]
                 
         return cls.tree
 
     @classmethod
     def predict(cls, embedding):
         SearchService.get_model()
-        dist, ind = cls.tree.query(embedding, k=5)
-        return [cls.filenames[idx] for idx in ind[0]]
+        
+        heap = []
+        for i in range(len(cls.tree)):
+            tree = cls.tree[i]
+            dist, ind = tree.query(embedding, k=5)
+            dist, ind = dist[0], ind[0]
+            
+            for j in range(len(dist)):
+                if len(heap) < 5:
+                    heapq.heappush(heap, (-dist[j], cls.filenames[i][ind[j]]))
+                    
+                elif dist[j] < -heap[0][0]:
+                    heapq.heappop(heap)
+                    heapq.heappush(heap, (-dist[j], cls.filenames[i][ind[j]]))
+        
+        return [y for x, y in heap]
 
 app = flask.Flask(__name__)
 
@@ -89,7 +106,7 @@ def search():
         i = 0
         for file in img_paths:
             ax = plt.subplot(1, len(img_paths), i+1)
-            img = tf.keras.preprocessing.image.load_img(file)
+            img = tf.keras.preprocessing.image.load_img(os.path.join(local_path, file))
             img_array = tf.keras.preprocessing.image.img_to_array(img)
             plt.imshow(img_array / 255)
             plt.axis('off')

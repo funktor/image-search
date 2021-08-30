@@ -9,7 +9,7 @@ s3_model_bucket = 'model-bucket-sagemaker-image-search'
 s3_data_key = 'tfrecords'
 sagemaker_ecr = 'sagemaker-image-search-deploy-repo:latest'
 endpoint_name = 'image-search-engine'
-model_path = "s3://{}/output/image-search-2021-08-12-09-41-24-388/output/model.tar.gz".format(s3_model_bucket)
+model_path = "s3://{}/output/image-search-2021-08-30-08-14-18-650/output/model.tar.gz".format(s3_model_bucket)
 
 role = boto3.client('iam').get_role(RoleName=sagemaker_role)['Role']['Arn']
 sess = sage.Session()
